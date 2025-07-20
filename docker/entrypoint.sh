@@ -29,7 +29,7 @@ generate_keys() {
     export JWT_PUBLIC_KEY_PATH="$public_key_path"
 }
 
-# Function to wait for database
+# Function to wait for database with improved reliability
 wait_for_db() {
     if [ -n "$DATABASE_URL" ]; then
         echo "Waiting for database to be ready..."
@@ -37,17 +37,43 @@ wait_for_db() {
         # Extract database connection details
         DB_HOST=$(echo $DATABASE_URL | sed -n 's/.*@\([^:]*\):.*/\1/p')
         DB_PORT=$(echo $DATABASE_URL | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
+        DB_USER=$(echo $DATABASE_URL | sed -n 's/.*\/\/\([^:]*\):.*/\1/p')
+        DB_NAME=$(echo $DATABASE_URL | sed -n 's/.*\/\([^?]*\).*/\1/p')
+        
+        echo "Database connection details: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
         
         if [ -n "$DB_HOST" ] && [ -n "$DB_PORT" ]; then
-            # Wait for database connection
-            timeout=30
+            # First wait for port to be open
+            timeout=60
             while ! nc -z "$DB_HOST" "$DB_PORT" 2>/dev/null; do
-                echo "Waiting for database at $DB_HOST:$DB_PORT..."
-                sleep 2
-                timeout=$((timeout - 2))
+                echo "Waiting for database port at $DB_HOST:$DB_PORT..."
+                sleep 3
+                timeout=$((timeout - 3))
                 if [ $timeout -le 0 ]; then
-                    echo "Database connection timeout!"
+                    echo "Database port connection timeout!"
                     exit 1
+                fi
+            done
+            
+            echo "Database port is open, checking database readiness..."
+            
+            # Then check if database is actually ready to accept connections
+            timeout=60
+            while ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" 2>/dev/null; do
+                echo "Waiting for database to be ready..."
+                sleep 3
+                timeout=$((timeout - 3))
+                if [ $timeout -le 0 ]; then
+                    echo "Database readiness timeout!"
+                    exit 1
+                fi
+            done
+            
+            echo "Database is ready!"
+        else
+            echo "Could not parse database connection details from DATABASE_URL"
+            exit 1
+        fi
                 fi
             done
             echo "Database is ready!"
